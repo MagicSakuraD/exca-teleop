@@ -1,14 +1,17 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { LogInIcon, Settings, Wifi, WifiOff, AlertTriangle } from "lucide-react"
+import { LogInIcon, Settings, Wifi, WifiOff, AlertTriangle, Power, Lightbulb, Megaphone, Zap, OctagonAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { SettingsPanel } from "@/components/settings-panel"
 import { HydraulicGauge } from "@/components/hydraulic-gauge"
 import { StatusIndicator } from "@/components/status-indicator"
 import { ConnectionLog } from "@/components/connection-log"
 import { LoginScreen } from "@/components/login-screen"
+import { ConnectDialog } from "@/components/connect-dialog"
 import { useWebRTC, type ConnectionState } from "@/hooks/useWebRTC"
+import { GamepadControl } from "@/components/GamepadControl"
+import { GlassButton } from "@/components/GlassButton"
 
 type ConnectionQuality = "excellent" | "good" | "poor" | "critical"
 
@@ -21,14 +24,19 @@ export default function RemoteExcavatorControl() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [username, setUsername] = useState("")
   const [excavatorName, setExcavatorName] = useState("")
-  const [signalingServer, setSignalingServer] = useState("ws://111.186.56.118:8090/ws")
+  const [signalingServer, setSignalingServer] = useState("wss://cyberc3-cloud-server.sjtu.edu.cn/ws")
   const videoRef = useRef<HTMLVideoElement>(null)
+  const [hasBeenConnected, setHasBeenConnected] = useState(false)
+
+  // 3. 添加新的控制状态
+  const [isLightOn, setIsLightOn] = useState(false);
+  const [speedMode, setSpeedMode] = useState<"TURTLE" | "RABBIT">("TURTLE");
 
   // WebRTC 连接
-  const { connectionState, logs, ping } = useWebRTC({
+  const { connectionState, logs, ping, stats, dataChannel } = useWebRTC({
     signalingServer,
-    identity: 'controller',
-    targetPeer: 'excavator',
+    identity: "controller",
+    targetPeer: excavatorName,
     enabled: isLoggedIn && excavatorName.length > 0,
     onVideoTrack: (stream) => {
       if (videoRef.current) {
@@ -43,6 +51,10 @@ export default function RemoteExcavatorControl() {
     setUsername(user)
   }
 
+  const handleConnect = (name: string) => {
+    setExcavatorName(name)
+  }
+
   const handleLogout = () => {
     setIsLoggedIn(false)
     setUsername("")
@@ -51,6 +63,7 @@ export default function RemoteExcavatorControl() {
     setArmAngle(0)
     setBucketAngle(0)
     setEngineTemp(0)
+    setHasBeenConnected(false)
   }
 
   const handleExcavatorNameChange = (name: string) => {
@@ -61,8 +74,46 @@ export default function RemoteExcavatorControl() {
     setSignalingServer(server)
   }
 
+  // 4. 添加控制处理函数 (尝试通过 DataChannel 发送)
+  const sendCommand = (cmd: string, value: any) => {
+    if (dataChannel && dataChannel.readyState === "open") {
+      dataChannel.send(JSON.stringify({ type: cmd, value }));
+    } else {
+      console.warn("DataChannel not ready", cmd);
+    }
+  };
+
+  const handleHorn = () => {
+    console.log("📢 滴滴！！");
+    sendCommand("horn", true);
+    // 简单的防抖或延时关闭逻辑可以在这里添加
+    setTimeout(() => sendCommand("horn", false), 200);
+  };
+
+  const handleEmergency = () => {
+    console.warn("🛑 紧急停机触发！！！");
+    sendCommand("emergency_stop", true);
+    alert("已发送紧急停机指令！");
+  };
+
+  const toggleLight = () => {
+    const newState = !isLightOn;
+    setIsLightOn(newState);
+    sendCommand("light", newState);
+  };
+
+  const toggleSpeed = () => {
+    const newMode = speedMode === "RABBIT" ? "TURTLE" : "RABBIT";
+    setSpeedMode(newMode);
+    sendCommand("speed_mode", newMode);
+  };
+
   // Simulate real-time sensor data when connected
   useEffect(() => {
+    if (connectionState === "connected") {
+      setHasBeenConnected(true)
+    }
+
     if (connectionState !== "connected") {
       // Reset data when not connected
       setHydraulicPressure(0)
@@ -113,21 +164,26 @@ export default function RemoteExcavatorControl() {
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-gray-950">
       {/* Video Stream Background */}
-      <div className="absolute inset-0">
+      <div className="absolute inset-0 bg-black">
         <video
           ref={videoRef}
           className="h-full w-full object-cover"
           autoPlay
           playsInline
           muted
-          loop
-          poster="/excavator-construction-site-view.jpg"
-        >
-          <source src="/placeholder-video.mp4" type="video/mp4" />
-        </video>
+        />
         {/* Subtle overlay for better text readability */}
         <div className="absolute inset-0 bg-black/10" />
       </div>
+
+      {/* Gamepad Control Logic */}
+      <GamepadControl dataChannel={dataChannel} />
+
+      {/* Connect Dialog */}
+      <ConnectDialog 
+        open={isLoggedIn && !excavatorName} 
+        onConnect={handleConnect} 
+      />
 
       {/* HUD Overlay - pointer-events-none on container, enable on interactive elements */}
       <div className="absolute inset-0 z-10 flex flex-col justify-between p-4 pointer-events-none">
@@ -137,16 +193,51 @@ export default function RemoteExcavatorControl() {
             <div className="bg-black/60 backdrop-blur-sm p-3 rounded-lg border border-white/10 pointer-events-auto">
               <div className="flex items-center gap-4">
                 <StatusIndicator state={connectionState} />
-                {connectionState === "connected" && (
+                {connectionState === "connected" && stats && (
                   <>
                     <div className="h-8 w-px bg-white/20" />
                     <div className="flex items-center gap-2">
                       <Wifi className="h-4 w-4 text-green-400" />
-                      <span className="text-xs uppercase tracking-wider text-gray-300">延迟</span>
+                      <span className="text-xs uppercase tracking-wider text-gray-300">RTT</span>
                       <span className={`font-mono text-lg font-bold ${getQualityColor(getConnectionQuality())}`}>
                         {ping}ms
                       </span>
                     </div>
+                    {stats.jitter > 0 && (
+                      <>
+                        <div className="h-8 w-px bg-white/20" />
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs uppercase tracking-wider text-gray-300">抖动</span>
+                          <span className="font-mono text-sm font-bold text-yellow-400">
+                            {stats.jitter.toFixed(1)}ms
+                          </span>
+                        </div>
+                      </>
+                    )}
+                    {stats.frameRate > 0 && (
+                      <>
+                        <div className="h-8 w-px bg-white/20" />
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs uppercase tracking-wider text-gray-300">帧率</span>
+                          <span className="font-mono text-sm font-bold text-cyan-400">
+                            {stats.frameRate.toFixed(0)}fps
+                          </span>
+                        </div>
+                      </>
+                    )}
+                    {stats && (
+                      <>
+                        <div className="h-8 w-px bg-white/20" />
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs uppercase tracking-wider text-gray-300">丢包率</span>
+                          <span className={`font-mono text-sm font-bold ${
+                            stats.packetLossRate > 0.1 ? "text-red-400" : "text-green-400"
+                          }`}>
+                            {stats.packetLossRate.toFixed(1)}%
+                          </span>
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -178,63 +269,67 @@ export default function RemoteExcavatorControl() {
           </div>
         </div>
 
-        {connectionState === "connected" && engineTemp > 95 && (
-          <div className="flex justify-center pointer-events-none">
-            <div className="bg-red-900/80 backdrop-blur-sm border-2 border-red-500 p-4 rounded-lg animate-pulse">
-              <div className="flex items-center gap-3">
-                <AlertTriangle className="h-6 w-6 text-red-200" />
-                <span className="text-lg font-bold text-red-100">引擎温度过高</span>
+        {/* Bottom Control Panel - VisionOS Style */}
+        {isLoggedIn && (
+          <div className="flex justify-center pb-8 animate-in slide-in-from-bottom-10 duration-700 fade-in pointer-events-none">
+            {/* Glass Container */}
+            <div className="flex items-center gap-2 md:gap-4 p-3 md:p-4 rounded-[2.5rem] md:rounded-[3rem] bg-black/20 backdrop-blur-2xl border border-white/10 shadow-[0_10px_40px_rgba(0,0,0,0.5)] pointer-events-auto">
+              
+              {/* --- Engine & Power Group --- */}
+              <div className="flex gap-2 md:gap-3">
+                <GlassButton 
+                  icon={Power} 
+                  label={connectionState === "connected" ? "运行中" : "待机"} 
+                  isActive={connectionState === "connected"}
+                  color={connectionState === "connected" ? "text-green-400" : "text-white"}
+                  onClick={() => console.log("Toggle Engine")} 
+                />
               </div>
-            </div>
-          </div>
-        )}
+              
+              <div className="w-px h-12 md:h-16 bg-white/10 mx-1 md:mx-2" />
 
-        {connectionState === "connected" && (
-          <div className="flex justify-center">
-            <div className="bg-black/60 backdrop-blur-sm p-4 rounded-lg border border-white/10">
-              <div className="flex gap-8">
-                {/* Hydraulic Pressure */}
-                <div className="flex flex-col items-center">
-                  <span className="text-xs uppercase tracking-wider text-gray-400 mb-2">液压压力</span>
-                  <HydraulicGauge value={hydraulicPressure} max={100} />
-                </div>
-
-                <div className="w-px bg-white/20" />
-
-                {/* Arm Angle */}
-                <div className="flex flex-col items-center min-w-[100px]">
-                  <span className="text-xs uppercase tracking-wider text-gray-400 mb-2">臂角度</span>
-                  <div className="font-mono text-3xl font-bold text-blue-400">{armAngle}°</div>
-                </div>
-
-                <div className="w-px bg-white/20" />
-
-                {/* Bucket Angle */}
-                <div className="flex flex-col items-center min-w-[100px]">
-                  <span className="text-xs uppercase tracking-wider text-gray-400 mb-2">铲斗角度</span>
-                  <div className="font-mono text-3xl font-bold text-cyan-400">{bucketAngle}°</div>
-                </div>
-
-                <div className="w-px bg-white/20" />
-
-                {/* Engine Temperature */}
-                <div className="flex flex-col items-center min-w-[100px]">
-                  <span className="text-xs uppercase tracking-wider text-gray-400 mb-2">引擎温度</span>
-                  <div
-                    className={`font-mono text-3xl font-bold ${
-                      engineTemp > 95 ? "text-red-400" : engineTemp > 90 ? "text-yellow-400" : "text-green-400"
-                    }`}
-                  >
-                    {engineTemp}°C
-                  </div>
-                </div>
+              {/* --- Auxiliaries Group --- */}
+              <div className="flex gap-2 md:gap-3">
+                <GlassButton 
+                  icon={Lightbulb} 
+                  label="工作灯" 
+                  isActive={isLightOn}
+                  color="text-yellow-400"
+                  onClick={toggleLight} 
+                />
+                <GlassButton 
+                  icon={Megaphone} 
+                  label="鸣笛" 
+                  color="text-orange-400"
+                  onClick={handleHorn} 
+                />
+                <GlassButton 
+                  icon={Zap} 
+                  label={speedMode === "RABBIT" ? "高速" : "低速"} 
+                  isActive={speedMode === "RABBIT"}
+                  color="text-cyan-400"
+                  onClick={toggleSpeed} 
+                />
               </div>
+
+              <div className="w-px h-12 md:h-16 bg-white/10 mx-1 md:mx-2" />
+
+              {/* --- E-Stop Group --- */}
+              <div className="flex gap-2 md:gap-3 pl-1 md:pl-2">
+                <GlassButton 
+                  icon={OctagonAlert} 
+                  label="急停" 
+                  isEmergency={true}
+                  onClick={handleEmergency} 
+                />
+              </div>
+
             </div>
           </div>
         )}
       </div>
 
-      {isLoggedIn && excavatorName && connectionState === "disconnected" && (
+      {hasBeenConnected && connectionState === "disconnected" && (
         <div className="absolute inset-0 z-50 bg-red-900/90 backdrop-blur-sm flex flex-col items-center justify-center">
           <WifiOff className="h-24 w-24 text-red-200 mb-6 animate-pulse" />
           <h1 className="text-6xl font-bold text-red-100 animate-pulse mb-4">连接中断</h1>
@@ -245,14 +340,9 @@ export default function RemoteExcavatorControl() {
       <SettingsPanel
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        isLoggedIn={isLoggedIn}
         username={username}
-        onLogin={handleLogin}
         onLogout={handleLogout}
         excavatorName={excavatorName}
-        onExcavatorNameChange={handleExcavatorNameChange}
-        signalingServer={signalingServer}
-        onSignalingServerChange={handleSignalingServerChange}
         showConnectionLog={isLoggedIn}
         connectionLogs={<ConnectionLog logs={logs} />}
       />

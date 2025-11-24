@@ -14,6 +14,16 @@ interface UseWebRTCOptions {
   targetPeer?: string
   enabled?: boolean
   onVideoTrack?: (stream: MediaStream) => void
+  onDataChannel?: (channel: RTCDataChannel) => void
+}
+
+export interface WebRTCStats {
+  rtt: number // 往返时间 (ms)
+  jitter: number // 抖动 (ms)
+  packetLossRate: number // 当前丢包率（%）
+  packetsReceived: number // 收到的包数
+  bytesReceived: number // 收到的字节数
+  frameRate: number // 帧率
 }
 
 export function useWebRTC({
@@ -22,15 +32,19 @@ export function useWebRTC({
   targetPeer = 'excavator',
   enabled = false,
   onVideoTrack,
+  onDataChannel,
 }: UseWebRTCOptions) {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected')
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [ping, setPing] = useState<number>(0)
+  const [stats, setStats] = useState<WebRTCStats | null>(null)
+  const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null)
   
   const wsRef = useRef<WebSocket | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
-  const pingIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const lastPingRef = useRef<number>(0)
+  const statsIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const prevPacketsLostRef = useRef<number | null>(null)
+  const prevPacketsReceivedRef = useRef<number | null>(null)
 
   // 使用 useRef 避免依赖问题
   const addLogRef = useRef((message: string, type: LogEntry['type'] = 'info') => {
@@ -45,6 +59,76 @@ export function useWebRTC({
 
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
     addLogRef.current(message, type)
+  }, [])
+
+  // 获取 WebRTC 统计信息
+  const getWebRTCStats = useCallback(async () => {
+    if (!pcRef.current) return
+
+    try {
+      const stats = await pcRef.current.getStats()
+      let rtt = 0
+      let jitter = 0
+      let packetsReceived = 0
+      let bytesReceived = 0
+      let frameRate = 0
+      let cumulativePacketsLost = 0
+
+      stats.forEach((report: any) => {
+        // inbound-rtp: 接收端统计
+        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+          cumulativePacketsLost = report.packetsLost || 0
+          packetsReceived = report.packetsReceived || 0
+          bytesReceived = report.bytesReceived || 0
+          jitter = report.jitter ? report.jitter * 1000 : 0 // 转换为毫秒
+          frameRate = report.framesPerSecond || 0
+        }
+
+        // remote-inbound-rtp: 远程入站统计（包含 RTT）
+        if (report.type === 'remote-inbound-rtp' && report.kind === 'video') {
+          rtt = report.roundTripTime ? report.roundTripTime * 1000 : 0 // 转换为毫秒
+        }
+
+        // candidate-pair: 连接候选对（也可能包含 RTT）
+        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+          if (report.currentRoundTripTime) {
+            rtt = report.currentRoundTripTime * 1000 // 转换为毫秒
+          }
+        }
+      })
+
+      // 计算当前时间窗口丢包率（基于增量）
+      let packetLossRate = 0
+      if (prevPacketsLostRef.current !== null && prevPacketsReceivedRef.current !== null) {
+        const deltaLost = Math.max(0, cumulativePacketsLost - prevPacketsLostRef.current)
+        const deltaRecv = Math.max(0, packetsReceived - prevPacketsReceivedRef.current)
+        const deltaTotal = deltaLost + deltaRecv
+        if (deltaTotal > 0) {
+          packetLossRate = (deltaLost / deltaTotal) * 100
+        }
+      }
+
+      // 更新历史计数（用于下次计算增量）
+      prevPacketsLostRef.current = cumulativePacketsLost
+      prevPacketsReceivedRef.current = packetsReceived
+
+      // 更新统计信息
+      setStats({
+        rtt,
+        jitter,
+        packetLossRate,
+        packetsReceived,
+        bytesReceived,
+        frameRate,
+      })
+
+      // 更新 ping 显示（使用 RTT）
+      if (rtt > 0) {
+        setPing(Math.round(rtt))
+      }
+    } catch (error) {
+      console.error('Failed to get WebRTC stats:', error)
+    }
   }, [])
 
   const sendSignaling = useCallback((type: string, payload: any) => {
@@ -66,6 +150,29 @@ export function useWebRTC({
       iceServers: [] // 本地网络不需要 STUN
     })
     
+    // 为控制器创建数据通道
+    if (identity === 'controller') {
+      addLog('为控制器创建数据通道...', 'info')
+      const dc = pc.createDataChannel('controls', { ordered: false, maxRetransmits: 0 })
+      dc.onopen = () => addLog('✅ 数据通道已打开', 'success')
+      dc.onclose = () => addLog('🔌 数据通道已关闭', 'info')
+      dc.onerror = (e) => addLog(`❌ 数据通道错误: ${e}`, 'error')
+      setDataChannel(dc)
+    } else {
+      // 为挖掘机设置数据通道回调
+      pc.ondatachannel = (event) => {
+        addLog('✅ 接收到数据通道', 'success')
+        const dc = event.channel
+        dc.onopen = () => addLog('✅ 数据通道已打开', 'success')
+        dc.onclose = () => addLog('🔌 数据通道已关闭', 'info')
+        dc.onerror = (e) => addLog(`❌ 数据通道错误: ${e}`, 'error')
+        if (onDataChannel) {
+          onDataChannel(dc)
+        }
+        setDataChannel(dc)
+      }
+    }
+
     // 监听 ICE 候选
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -81,12 +188,29 @@ export function useWebRTC({
       if (pc.iceConnectionState === 'connected') {
         addLog('✅ WebRTC 连接成功！', 'success')
         setConnectionState('connected')
+        
+        // 启动定期获取 WebRTC 统计信息（每秒一次）
+        statsIntervalRef.current = setInterval(() => {
+          getWebRTCStats()
+        }, 1000)
       } else if (pc.iceConnectionState === 'failed') {
         addLog('❌ WebRTC 连接失败', 'error')
         setConnectionState('disconnected')
+        
+        // 停止统计信息收集
+        if (statsIntervalRef.current) {
+          clearInterval(statsIntervalRef.current)
+          statsIntervalRef.current = null
+        }
       } else if (pc.iceConnectionState === 'disconnected') {
         addLog('⚠️ WebRTC 连接断开', 'info')
         setConnectionState('disconnected')
+        
+        // 停止统计信息收集
+        if (statsIntervalRef.current) {
+          clearInterval(statsIntervalRef.current)
+          statsIntervalRef.current = null
+        }
       }
     }
     
@@ -124,7 +248,7 @@ export function useWebRTC({
     
     addLog(`发送 Offer 到 ${targetPeer}...`, 'info')
     sendSignaling('offer', pc.localDescription)
-  }, [addLog, sendSignaling, targetPeer, onVideoTrack])
+  }, [addLog, sendSignaling, targetPeer, onVideoTrack, getWebRTCStats, identity, onDataChannel])
 
   const handleSignalingMessage = useCallback(async (msg: any) => {
     addLog(`收到信令: ${msg.type} (来自 ${msg.from})`, 'info')
@@ -143,9 +267,6 @@ export function useWebRTC({
       } catch (error) {
         addLog(`ICE 候选添加失败: ${error}`, 'error')
       }
-    } else if (msg.type === 'pong') {
-      const latency = Date.now() - lastPingRef.current
-      setPing(latency)
     }
   }, [addLog])
 
@@ -171,14 +292,6 @@ export function useWebRTC({
         
         // 创建 PeerConnection
         createPeerConnection()
-        
-        // 启动 ping 检测
-        pingIntervalRef.current = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            lastPingRef.current = Date.now()
-            ws.send(JSON.stringify({ type: 'ping', from: identity }))
-          }
-        }, 2000)
       }
       
       ws.onmessage = async (event) => {
@@ -198,10 +311,6 @@ export function useWebRTC({
       ws.onclose = () => {
         addLog('🔌 信令服务器断开', 'info')
         setConnectionState('disconnected')
-        if (pingIntervalRef.current) {
-          clearInterval(pingIntervalRef.current)
-          pingIntervalRef.current = null
-        }
       }
       
       wsRef.current = ws
@@ -221,13 +330,16 @@ export function useWebRTC({
       wsRef.current.close()
       wsRef.current = null
     }
-    if (pingIntervalRef.current) {
-      clearInterval(pingIntervalRef.current)
-      pingIntervalRef.current = null
+    if (statsIntervalRef.current) {
+      clearInterval(statsIntervalRef.current)
+      statsIntervalRef.current = null
     }
+    prevPacketsLostRef.current = null
+    prevPacketsReceivedRef.current = null
     addLog('已断开所有连接', 'info')
     setConnectionState('disconnected')
     setPing(0)
+    setStats(null)
   }, [addLog])
 
   // 使用 ref 保存最新的 connect 和 disconnect
@@ -256,6 +368,8 @@ export function useWebRTC({
     connectionState,
     logs,
     ping,
+    stats,
+    dataChannel,
     connect,
     disconnect,
   }
