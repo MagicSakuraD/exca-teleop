@@ -7,6 +7,7 @@ interface GlassButtonProps {
   isActive?: boolean;
   color?: string;
   isEmergency?: boolean;
+  disabled?: boolean; // 🎤 添加禁用状态
   onClick: () => void;
 }
 
@@ -16,11 +17,13 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
   isActive = false, 
   color = "text-white", 
   isEmergency = false, 
+  disabled = false, // 🎤 默认不禁用
   onClick 
 }) => {
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
       className={`
         group relative flex flex-col items-center justify-center 
         w-20 h-20 md:w-24 md:h-24 rounded-3xl backdrop-blur-xl transition-all duration-300 ease-out
@@ -31,6 +34,9 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
         
         /* 点击态 */
         active:scale-95
+        
+        /* 禁用态 */
+        ${disabled ? "opacity-50 cursor-not-allowed hover:scale-100 hover:bg-white/10" : ""}
         
         ${isEmergency 
           ? "bg-red-500/30 hover:bg-red-500/50 shadow-red-900/20" 

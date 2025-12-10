@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { LogInIcon, Settings, Wifi, WifiOff, AlertTriangle, Power, Lightbulb, Megaphone, Zap, OctagonAlert } from "lucide-react"
+import { LogInIcon, Settings, Wifi, WifiOff, AlertTriangle, Power, Lightbulb, Megaphone, Zap, OctagonAlert, Mic, MicOff, Volume2, VolumeX } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { SettingsPanel } from "@/components/settings-panel"
 import { HydraulicGauge } from "@/components/hydraulic-gauge"
@@ -31,13 +31,26 @@ export default function RemoteExcavatorControl() {
   // 3. 添加新的控制状态
   const [isLightOn, setIsLightOn] = useState(false);
   const [speedMode, setSpeedMode] = useState<"TURTLE" | "RABBIT">("TURTLE");
+  const [micEnabled, setMicEnabled] = useState(true); // 🎤 是否启用麦克风功能
+  const [isSpeakerMuted, setIsSpeakerMuted] = useState(true); // 🔊 远程音频默认关闭（确保视频自动播放）
 
   // WebRTC 连接
-  const { connectionState, logs, ping, stats, dataChannel } = useWebRTC({
+  const { 
+    connectionState, 
+    logs, 
+    ping, 
+    stats, 
+    dataChannel,
+    // 🎤 麦克风相关
+    isMuted,
+    microphoneReady,
+    toggleMute,
+  } = useWebRTC({
     signalingServer,
     identity: "controller",
     targetPeer: excavatorName,
     enabled: isLoggedIn && excavatorName.length > 0,
+    enableMicrophone: micEnabled, // 🎤 启用麦克风
     onVideoTrack: (stream) => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream
@@ -108,6 +121,15 @@ export default function RemoteExcavatorControl() {
     sendCommand("speed_mode", newMode);
   };
 
+  // 🔊 切换远程音频（扬声器）静音状态
+  const toggleSpeaker = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !videoRef.current.muted;
+      setIsSpeakerMuted(videoRef.current.muted);
+      console.log(videoRef.current.muted ? "🔇 扬声器已静音" : "🔊 扬声器已开启");
+    }
+  };
+
   // Simulate real-time sensor data when connected
   useEffect(() => {
     if (connectionState === "connected") {
@@ -170,7 +192,7 @@ export default function RemoteExcavatorControl() {
           className="h-full w-full object-cover"
           autoPlay
           playsInline
-          muted
+          muted={isSpeakerMuted}
         />
         {/* Subtle overlay for better text readability */}
         <div className="absolute inset-0 bg-black/10" />
@@ -309,6 +331,23 @@ export default function RemoteExcavatorControl() {
                   isActive={speedMode === "RABBIT"}
                   color="text-cyan-400"
                   onClick={toggleSpeed} 
+                />
+                {/* 🎤 麦克风按钮（发送语音） */}
+                <GlassButton 
+                  icon={isMuted ? MicOff : Mic} 
+                  label={!microphoneReady ? "无麦克风" : (isMuted ? "静音中" : "发送中")} 
+                  isActive={!isMuted && microphoneReady}
+                  color={!microphoneReady ? "text-gray-500" : (isMuted ? "text-red-400" : "text-green-400")}
+                  onClick={toggleMute}
+                  disabled={!microphoneReady}
+                />
+                {/* 🔊 扬声器按钮（接收语音） */}
+                <GlassButton 
+                  icon={isSpeakerMuted ? VolumeX : Volume2} 
+                  label={isSpeakerMuted ? "扬声器关" : "扬声器开"} 
+                  isActive={!isSpeakerMuted}
+                  color={isSpeakerMuted ? "text-red-400" : "text-green-400"}
+                  onClick={toggleSpeaker}
                 />
               </div>
 
