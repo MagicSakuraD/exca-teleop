@@ -54,6 +54,13 @@ export function useWebRTC({
   const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null) // 心跳定时器
   const prevPacketsLostRef = useRef<number | null>(null)
   const prevPacketsReceivedRef = useRef<number | null>(null)
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const reconnectAttemptsRef = useRef<number>(0)
+  const isIntentionalDisconnectRef = useRef<boolean>(false)
+  
+  // Forward refs for connect/disconnect to break dependency cycles
+  const connectRef = useRef<() => void>(() => {})
+  const disconnectRef = useRef<() => void>(() => {})
 
   // 使用 useRef 避免依赖问题
   const addLogRef = useRef((message: string, type: LogEntry['type'] = 'info') => {
@@ -338,16 +345,33 @@ export function useWebRTC({
     }
   }, [addLog])
 
+  const scheduleReconnect = useCallback(() => {
+    if (reconnectAttemptsRef.current >= 10) {
+      addLogRef.current('❌ 重连失败次数过多，停止自动重连', 'error')
+      return
+    }
+
+    const delay = Math.min(1000 * Math.pow(1.5, reconnectAttemptsRef.current), 30000)
+    addLogRef.current(`⚠️ 连接断开，${(delay / 1000).toFixed(1)}秒后尝试重连...`, 'info')
+    
+    reconnectTimeoutRef.current = setTimeout(() => {
+      reconnectAttemptsRef.current += 1
+      connectRef.current()
+    }, delay)
+  }, [])
+
   const connect = useCallback(() => {
     if (!enabled || wsRef.current) return
 
     try {
+      isIntentionalDisconnectRef.current = false
       addLog('正在连接信令服务器...', 'info')
       setConnectionState('connecting')
       
       const ws = new WebSocket(signalingServer)
       
       ws.onopen = () => {
+        reconnectAttemptsRef.current = 0 // 重置重连次数
         addLog('✅ 信令服务器连接成功', 'success')
         
         // 注册身份
@@ -396,11 +420,17 @@ export function useWebRTC({
       ws.onclose = () => {
         addLog('🔌 信令服务器断开', 'info')
         setConnectionState('disconnected')
+        wsRef.current = null // 确保引用被清空
         
         // 清除心跳定时器
         if (heartbeatIntervalRef.current) {
           clearInterval(heartbeatIntervalRef.current)
           heartbeatIntervalRef.current = null
+        }
+
+        // 尝试重连
+        if (!isIntentionalDisconnectRef.current) {
+          scheduleReconnect()
         }
       }
       
@@ -410,7 +440,7 @@ export function useWebRTC({
       addLog(`❌ 连接失败: ${error}`, 'error')
       setConnectionState('disconnected')
     }
-  }, [enabled, signalingServer, identity, addLog, createPeerConnection, handleSignalingMessage])
+  }, [enabled, signalingServer, identity, addLog, createPeerConnection, handleSignalingMessage, scheduleReconnect])
 
   // 🎤 切换麦克风静音状态
   const toggleMute = useCallback(() => {
@@ -428,6 +458,15 @@ export function useWebRTC({
   }, [addLog])
 
   const disconnect = useCallback(() => {
+    isIntentionalDisconnectRef.current = true
+    
+    // 清除重连定时器
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current)
+      reconnectTimeoutRef.current = null
+    }
+    reconnectAttemptsRef.current = 0
+
     // 🎤 停止本地麦克风流
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop())
@@ -466,10 +505,6 @@ export function useWebRTC({
     setStats(null)
   }, [addLog])
 
-  // 使用 ref 保存最新的 connect 和 disconnect
-  const connectRef = useRef(connect)
-  const disconnectRef = useRef(disconnect)
-  
   useEffect(() => {
     connectRef.current = connect
     disconnectRef.current = disconnect

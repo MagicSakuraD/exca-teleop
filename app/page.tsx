@@ -24,7 +24,7 @@ export default function RemoteExcavatorControl() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [username, setUsername] = useState("")
   const [excavatorName, setExcavatorName] = useState("")
-  const [signalingServer, setSignalingServer] = useState("wss://cyberc3-cloud-server.sjtu.edu.cn/ws")
+  const [signalingServer, setSignalingServer] = useState("ws://localhost:8090/ws")
   const videoRef = useRef<HTMLVideoElement>(null)
   const [hasBeenConnected, setHasBeenConnected] = useState(false)
 

@@ -70,7 +70,7 @@ cd ../excavator
 默认配置在 `app/page.tsx` 中：
 
 ```typescript
-const [signalingServer, setSignalingServer] = useState("wss://cyberc3-cloud-server.sjtu.edu.cn/ws")
+const [signalingServer, setSignalingServer] = useState("ws://localhost:8090/ws")
 ```
 
 可以通过设置面板修改，或直接编辑代码。
