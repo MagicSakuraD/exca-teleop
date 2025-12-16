@@ -14,8 +14,8 @@ export interface ExcavatorControls {
 
   // --- 装载机/线控底盘扩展信号 ---
   steering: number; // 铰接转向: -1 (左) to 1 (右)
-  throttle: number; // 油门: 0 to 1
-  brake: number;    // 刹车: 0 to 1
+  throttle: number; // 油门: -1 (踩死) to 1 (松开) - G293 原始值
+  brake: number;    // 刹车: -1 (踩死) to 1 (松开) - G293 原始值
   
   // --- 关键辅助信号 (Excel "必须") ---
   emergency_stop: boolean; // 紧急急停 (红色蘑菇头)
@@ -54,7 +54,7 @@ const LOADER_MAPPING = {
   // 罗技方向盘 (G29/G923 等)
   STEERING_AXIS: 0, // 方向盘 (左负右正)
   THROTTLE_AXIS: 2, // 油门踏板 (默认1, 踩下-1)
-  BRAKE_AXIS: 3,    // 刹车踏板 (默认1, 踩下-1) - 通常刹车是轴3，离合是轴1，需根据实际情况微调
+  BRAKE_AXIS: 5,    // 刹车踏板 (默认1, 踩下-1) - 通常刹车是轴3，离合是轴1，需根据实际情况微调
   
   // 按钮索引 (实测 G923/Xbox模式)
   BTN_CROSS: 0,   // A
@@ -74,12 +74,46 @@ const LOADER_MAPPING = {
   JOYSTICK_BUCKET_AXIS: 0, // X轴 - 铲斗
 };
 
-// 踏板归一化工具：将 1(松) ~ -1(踩) 转换为 0(松) ~ 1(踩)
-// 用户实测: 默认1, 踩死-1
-const normalizePedal = (val: number) => {
-  // (1 - 1) / 2 = 0
-  // (1 - (-1)) / 2 = 1
-  return (1 - val) / 2; 
+// Xbox 360 / One / Series 控制器映射 (标准 XInput)
+const XBOX_MAPPING = {
+  STEERING_AXIS: 0, // 左摇杆 X轴
+  DRIVE_AXIS: 1,    // 左摇杆 Y轴 (前推油门，后拉刹车)
+  BUCKET_AXIS: 2,   // 右摇杆 X轴 (铲斗)
+  BOOM_AXIS: 3,     // 右摇杆 Y轴 (大臂)
+
+  // 按钮
+  BTN_A: 0,
+  BTN_B: 1,
+  BTN_X: 2,
+  BTN_Y: 3,
+  BTN_LB: 4,        // 倒档
+  BTN_RB: 5,        // 前进档
+  BTN_LT: 6,
+  BTN_RT: 7,
+  BTN_BACK: 8,      // 急停
+  BTN_START: 9,
+  BTN_LS: 10,       // 喇叭
+  BTN_RS: 11,
+  BTN_UP: 12,       // 灯光
+  BTN_DOWN: 13,
+  BTN_LEFT: 14,
+  BTN_RIGHT: 15,
+};
+
+// 踏板原始值处理：直接使用 G293 原始值，不做归一化
+// G293 实测: 松开 = 1, 踩死 = -1
+// 只做死区处理，避免未初始化值
+const getPedalValue = (val: number | undefined): number => {
+  // 处理未定义或 NaN 的情况，返回 1（松开状态）
+  if (val === undefined || isNaN(val)) {
+    return 1;
+  }
+  // 死区处理：如果轴值在 -0.1 到 0.1 之间，认为是未初始化，返回 1（松开）
+  if (Math.abs(val) < 0.1) {
+    return 1;
+  }
+  // 直接返回原始值：1 (松开) ~ -1 (踩死)
+  return val;
 };
 
 // 死区，避免摇杆轻微晃动产生误操作
@@ -102,10 +136,10 @@ export const useExcavatorGamepad = () => {
     boom: 0,
     stick: 0,
     bucket: 0,
-    // 初始化扩展字段
+    // 初始化扩展字段（踏板默认值：1 = 松开）
     steering: 0,
-    throttle: 0,
-    brake: 0,
+    throttle: 1,  // G293: 1 = 松开
+    brake: 1,     // G293: 1 = 松开
     emergency_stop: false,
     parking_brake: true, // 默认拉起手刹
     horn: false,
@@ -145,19 +179,30 @@ export const useExcavatorGamepad = () => {
       // 如果有两个手柄，且名字都像摇杆 -> 挖掘机模式
       // 如果有一个是方向盘 (Wheel) -> 装载机模式
       
-      let mode: 'excavator' | 'loader' = 'excavator';
+      let mode: 'excavator' | 'loader' | 'xbox' = 'excavator';
       let wheel: Gamepad | null = null;
       let joystick: Gamepad | null = null;
+      let xbox: Gamepad | null = null;
       const leftGamepad = gamepads[EXCAVATOR_MAPPING.LEFT_GAMEPAD_INDEX];
       const rightGamepad = gamepads[EXCAVATOR_MAPPING.RIGHT_GAMEPAD_INDEX];
 
-      // 遍历寻找方向盘
+      // 遍历寻找方向盘或 Xbox 手柄
       for (const gp of gamepads) {
-        if (gp && (gp.id.toLowerCase().includes('wheel') || gp.id.toLowerCase().includes('g29') || gp.id.toLowerCase().includes('g923'))) {
+        if (!gp) continue;
+        const id = gp.id.toLowerCase();
+        
+        if (id.includes('wheel') || id.includes('g29') || id.includes('g923')) {
           mode = 'loader';
           wheel = gp;
+          break; // 优先方向盘
         }
-        if (gp && (gp.id.toLowerCase().includes('extreme') || gp.id.toLowerCase().includes('joystick'))) {
+        
+        if (id.includes('xbox') || id.includes('xinput') || id.includes('microsoft')) {
+          mode = 'xbox';
+          xbox = gp;
+        }
+        
+        if (id.includes('extreme') || id.includes('joystick')) {
           joystick = gp; // 找到一个摇杆作为右手
         }
       }
@@ -194,8 +239,8 @@ export const useExcavatorGamepad = () => {
           
           // 1. 驾驶 (方向盘)
           steering: normalizeAxisValue(wheel.axes[LOADER_MAPPING.STEERING_AXIS]),
-          throttle: normalizePedal(wheel.axes[LOADER_MAPPING.THROTTLE_AXIS]),
-          brake: normalizePedal(wheel.axes[LOADER_MAPPING.BRAKE_AXIS]),
+          throttle: wheel.axes[LOADER_MAPPING.THROTTLE_AXIS], // 直接读取硬件原始值，未定义时默认1（松开）
+          brake: wheel.axes[LOADER_MAPPING.BRAKE_AXIS] ,       // 直接读取硬件原始值，未定义时默认1（松开）
           
           // 2. 档位 (使用锁存状态)
           gear: gearRef.current,
@@ -212,6 +257,75 @@ export const useExcavatorGamepad = () => {
           // 其他默认
           speed_mode: 'turtle',
           light_code: 0,
+          hydraulic_lock: false,
+          power_enable: true,
+        };
+      } else if (mode === 'xbox' && xbox) {
+        // ===========================
+        // Xbox 模式 (户外调试用)
+        // ===========================
+
+        // --- 档位逻辑 ---
+        // RB -> D, LB -> R
+        const isDPressed = xbox.buttons[XBOX_MAPPING.BTN_RB].pressed;
+        const isRPressed = xbox.buttons[XBOX_MAPPING.BTN_LB].pressed;
+
+        if (isDPressed && !prevGearButtonsRef.current.r1) gearRef.current = 'D';
+        if (isRPressed && !prevGearButtonsRef.current.l1) gearRef.current = 'R';
+        if (isDPressed && isRPressed) gearRef.current = 'N';
+
+        prevGearButtonsRef.current = { r1: isDPressed, l1: isRPressed };
+
+        // --- 油门/刹车分离逻辑 (左摇杆 Y轴: Axis 1) ---
+        // 原始值: -1 (上/前) ~ 1 (下/后)
+        const driveAxis = xbox.axes[XBOX_MAPPING.DRIVE_AXIS];
+        let throttle = 0;
+        let brake = 0;
+
+        if (driveAxis < -DEADZONE) {
+          // 前推 -> 油门
+          throttle = Math.abs(driveAxis);
+        } else if (driveAxis > DEADZONE) {
+          // 后拉 -> 刹车
+          brake = Math.abs(driveAxis);
+        }
+
+        newControls = {
+          leftTrack: 0, rightTrack: 0, swing: 0, stick: 0,
+
+          // 1. 驾驶 (左摇杆 X)
+          steering: normalizeAxisValue(xbox.axes[XBOX_MAPPING.STEERING_AXIS]),
+          throttle: throttle,
+          brake: brake,
+
+          // 2. 档位
+          gear: gearRef.current,
+
+          // 3. 作业 (右摇杆)
+          // 主流操作: 右摇杆 Y (Axis 3) 控制大臂 (Up/Down), 右摇杆 X (Axis 2) 控制铲斗 (Left/Right)
+          // 注意: 摇杆 Y 向下是正值 (+1), 向上是负值 (-1)
+          // ExcavatorControls 定义: boom -1(降) to 1(提)
+          // 物理习惯: 拉杆(向下/后) -> 提大臂 -> 需要正值
+          // 物理习惯: 推杆(向上/前) -> 降大臂 -> 需要负值
+          // XInput Axis 3: 下是 +1, 上是 -1.
+          // 目标: 1(提), -1(降). 
+          // 这里的映射取决于操作习惯。 ISO模式: 拉杆(下)是提臂(Up)。
+          // 所以 Axis > 0 (下) -> Boom > 0 (提). 
+          // 结论: 不需要乘 -1。
+          boom: normalizeAxisValue(xbox.axes[XBOX_MAPPING.BOOM_AXIS]), 
+
+          // 铲斗: -1(收) to 1(翻)
+          // 物理习惯: 左推(收) -> Axis 2 负值; 右推(翻) -> Axis 2 正值
+          bucket: normalizeAxisValue(xbox.axes[XBOX_MAPPING.BUCKET_AXIS]),
+
+          // 4. 辅助功能
+          horn: xbox.buttons[XBOX_MAPPING.BTN_LS].pressed || xbox.buttons[XBOX_MAPPING.BTN_Y].pressed, // LS按下或Y键
+          parking_brake: xbox.buttons[XBOX_MAPPING.BTN_B].pressed, // B键手刹
+          emergency_stop: xbox.buttons[XBOX_MAPPING.BTN_BACK].pressed, // Back键急停
+          
+          light_code: xbox.buttons[XBOX_MAPPING.BTN_UP].pressed ? 0x10 : 0, // D-Pad上 开灯
+          speed_mode: xbox.buttons[XBOX_MAPPING.BTN_X].pressed ? 'rabbit' : 'turtle', // X键切换速度(暂定按住兔子)
+
           hydraulic_lock: false,
           power_enable: true,
         };
@@ -263,7 +377,7 @@ export const useExcavatorGamepad = () => {
       animationFrameRef.current = requestAnimationFrame(updateControls);
 
       //打印newControls
-      // console.log("newControls", newControls);
+      console.log("newControls", newControls);
     };
     updateControls();
     return () => {

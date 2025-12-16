@@ -21,10 +21,56 @@ interface UseWebRTCOptions {
 export interface WebRTCStats {
   rtt: number // 往返时间 (ms)
   jitter: number // 抖动 (ms)
-  packetLossRate: number // 当前丢包率（%）
   packetsReceived: number // 收到的包数
   bytesReceived: number // 收到的字节数
   frameRate: number // 帧率
+}
+
+// 📡 定义遥测数据接口 (匹配 Go 端结构)
+export interface TelemetryData {
+  device_id: string;
+  timestamp: number;
+  connection: {
+    status: string;
+    latency_ms: number;
+    frame_rate: number;
+    seq?: number; // [新增] 包序号，用于检测丢包
+  };
+  safety: {
+    emergency_stop: boolean;
+    parking_brake: boolean;
+    hydraulic_lock: boolean;
+    power_enable: boolean;
+    fault_code: number;
+  };
+  motion: {
+    gear: string;
+    speed_mode: string;
+    speed_kph: number;
+    engine_rpm: number;
+    steering_angle_deg: number;
+    steering_norm: number;
+    left_track_speed: number;
+    right_track_speed: number;
+    throttle_feedback: number;
+    brake_feedback: number;
+  };
+  attitude: {
+    pitch_deg: number;
+    roll_deg: number;
+    yaw_deg: number;
+  };
+  // 忽略 arm 和 vitals 的详细定义以简化，需要时再加
+  vitals: {
+    fuel_percent: number;
+    coolant_temp_c: number;
+    hydraulic_pressure_bar: number;
+    battery_voltage_v: number;
+  };
+  aux: { // [修改] 替代 lights，扩展性更强
+    light_code: number;
+    horn_status: boolean; // [移入] 喇叭状态
+  };
 }
 
 export function useWebRTC({
@@ -41,6 +87,8 @@ export function useWebRTC({
   const [ping, setPing] = useState<number>(0)
   const [stats, setStats] = useState<WebRTCStats | null>(null)
   const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null)
+  const [telemetry, setTelemetry] = useState<TelemetryData | null>(null) // 📡 遥测数据状态
+  const lastTelemetryTimeRef = useRef<number>(0) // 看门狗计时
   
   // 🎤 麦克风相关状态
   const [isMuted, setIsMuted] = useState<boolean>(false) // 默认开启
@@ -52,7 +100,6 @@ export function useWebRTC({
   const remoteStreamRef = useRef<MediaStream | null>(null) // 🔊 远程合并流（音视频）
   const statsIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null) // 心跳定时器
-  const prevPacketsLostRef = useRef<number | null>(null)
   const prevPacketsReceivedRef = useRef<number | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const reconnectAttemptsRef = useRef<number>(0)
@@ -88,12 +135,10 @@ export function useWebRTC({
       let packetsReceived = 0
       let bytesReceived = 0
       let frameRate = 0
-      let cumulativePacketsLost = 0
 
       stats.forEach((report: any) => {
         // inbound-rtp: 接收端统计
         if (report.type === 'inbound-rtp' && report.kind === 'video') {
-          cumulativePacketsLost = report.packetsLost || 0
           packetsReceived = report.packetsReceived || 0
           bytesReceived = report.bytesReceived || 0
           jitter = report.jitter ? report.jitter * 1000 : 0 // 转换为毫秒
@@ -113,26 +158,13 @@ export function useWebRTC({
         }
       })
 
-      // 计算当前时间窗口丢包率（基于增量）
-      let packetLossRate = 0
-      if (prevPacketsLostRef.current !== null && prevPacketsReceivedRef.current !== null) {
-        const deltaLost = Math.max(0, cumulativePacketsLost - prevPacketsLostRef.current)
-        const deltaRecv = Math.max(0, packetsReceived - prevPacketsReceivedRef.current)
-        const deltaTotal = deltaLost + deltaRecv
-        if (deltaTotal > 0) {
-          packetLossRate = (deltaLost / deltaTotal) * 100
-        }
-      }
-
       // 更新历史计数（用于下次计算增量）
-      prevPacketsLostRef.current = cumulativePacketsLost
       prevPacketsReceivedRef.current = packetsReceived
 
       // 更新统计信息
       setStats({
         rtt,
         jitter,
-        packetLossRate,
         packetsReceived,
         bytesReceived,
         frameRate,
@@ -169,23 +201,70 @@ export function useWebRTC({
     // 为控制器创建数据通道
     if (identity === 'controller') {
       addLog('为控制器创建数据通道...', 'info')
+      
+      // 1. 创建控制通道 (Controls) - 用于发送指令
       const dc = pc.createDataChannel('controls', { ordered: false, maxRetransmits: 0 })
-      dc.onopen = () => addLog('✅ 数据通道已打开', 'success')
-      dc.onclose = () => addLog('🔌 数据通道已关闭', 'info')
-      dc.onerror = (e) => addLog(`❌ 数据通道错误: ${e}`, 'error')
+      dc.onopen = () => addLog('✅ 控制通道已打开', 'success')
+      dc.onclose = () => addLog('🔌 控制通道已关闭', 'info')
+      dc.onerror = (e) => addLog(`❌ 控制通道错误: ${e}`, 'error')
       setDataChannel(dc)
+
+      // 2. 创建遥测通道 (Telemetry) - 用于接收状态
+      // 前端主动创建，Go 端监听到后会开始推送数据
+      addLog('为控制器创建遥测通道...', 'info')
+      const dcTelemetry = pc.createDataChannel('telemetry', { ordered: false, maxRetransmits: 0 })
+      
+      dcTelemetry.onopen = () => addLog('✅ 遥测通道已打开', 'success')
+      dcTelemetry.onclose = () => addLog('🔌 遥测通道已关闭', 'info')
+      dcTelemetry.onerror = (e) => addLog(`❌ 遥测通道错误: ${e}`, 'error')
+      
+      dcTelemetry.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data) as TelemetryData
+          // 🐛 调试用：打印接收到的遥测数据 (每30帧打印一次，防止刷屏)
+          if (data.connection.seq && data.connection.seq % 30 === 0) {
+            console.log('📡 Telemetry:', data)
+          }
+          setTelemetry(data)
+          lastTelemetryTimeRef.current = Date.now()
+        } catch (err) {
+          console.warn('解析遥测数据失败:', err)
+        }
+      }
+
     } else {
       // 为挖掘机设置数据通道回调
       pc.ondatachannel = (event) => {
-        addLog('✅ 接收到数据通道', 'success')
         const dc = event.channel
-        dc.onopen = () => addLog('✅ 数据通道已打开', 'success')
-        dc.onclose = () => addLog('🔌 数据通道已关闭', 'info')
-        dc.onerror = (e) => addLog(`❌ 数据通道错误: ${e}`, 'error')
-        if (onDataChannel) {
-          onDataChannel(dc)
+        addLog(`✅ 接收到数据通道: ${dc.label}`, 'success')
+        
+        if (dc.label === 'telemetry') {
+          // 📡 处理遥测数据通道
+          dc.onopen = () => addLog('✅ 遥测通道已打开', 'success')
+          dc.onmessage = (e) => {
+            try {
+              const data = JSON.parse(e.data) as TelemetryData
+              // 🐛 调试用：打印接收到的遥测数据 (每30帧打印一次，防止刷屏)
+              if (data.connection.seq && data.connection.seq % 30 === 0) {
+                console.log('📡 Telemetry:', data)
+              }
+              setTelemetry(data)
+              lastTelemetryTimeRef.current = Date.now()
+            } catch (err) {
+              console.warn('解析遥测数据失败:', err)
+            }
+          }
+        } else {
+          // 处理其他通道 (如 controls 回显或视频信令)
+          dc.onopen = () => addLog('✅ 数据通道已打开', 'success')
+          dc.onclose = () => addLog('🔌 数据通道已关闭', 'info')
+          dc.onerror = (e) => addLog(`❌ 数据通道错误: ${e}`, 'error')
+          
+          if (onDataChannel) {
+            onDataChannel(dc)
+          }
+          setDataChannel(dc)
         }
-        setDataChannel(dc)
       }
     }
 
@@ -497,13 +576,26 @@ export function useWebRTC({
       clearInterval(heartbeatIntervalRef.current)
       heartbeatIntervalRef.current = null
     }
-    prevPacketsLostRef.current = null
     prevPacketsReceivedRef.current = null
     addLog('已断开所有连接', 'info')
     setConnectionState('disconnected')
     setPing(0)
     setStats(null)
+    setTelemetry(null)
   }, [addLog])
+
+  // 🐶 看门狗: 检查遥测数据是否超时 (500ms)
+  useEffect(() => {
+    const watchdogInterval = setInterval(() => {
+      if (connectionState === 'connected' && lastTelemetryTimeRef.current > 0) {
+        const now = Date.now()
+        if (now - lastTelemetryTimeRef.current > 500) {
+          // 超过 500ms 未收到数据，认为遥测丢失
+        }
+      }
+    }, 500)
+    return () => clearInterval(watchdogInterval)
+  }, [connectionState])
 
   useEffect(() => {
     connectRef.current = connect
@@ -529,6 +621,7 @@ export function useWebRTC({
     ping,
     stats,
     dataChannel,
+    telemetry, // 导出遥测数据
     connect,
     disconnect,
     // 🎤 麦克风相关
