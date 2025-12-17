@@ -137,8 +137,8 @@ export default function RemoteExcavatorControl() {
     }
   }, []);
 
-  // 🛡️ 安全状态解析
-  const isEmergencyStopped = telemetry?.safety.emergency_stop ?? uiOverrides.emergency_stop;
+  // 🛡️ 安全状态解析 (使用精简后的字段名)
+  const isEmergencyStopped = telemetry?.flags.estop ?? uiOverrides.emergency_stop;
   
   // ⌨️ 全局键盘监听
   useEffect(() => {

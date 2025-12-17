@@ -26,50 +26,35 @@ export interface WebRTCStats {
   frameRate: number // 帧率
 }
 
-// 📡 定义遥测数据接口 (匹配 Go 端结构)
+// 📡 定义遥测数据接口 (匹配 Go 端精简结构)
 export interface TelemetryData {
-  device_id: string;
-  timestamp: number;
-  connection: {
-    status: string;
-    latency_ms: number;
-    frame_rate: number;
-    seq?: number; // [新增] 包序号，用于检测丢包
+  id: string;           // 设备 ID
+  ts: number;           // 时间戳 (Unix ms)
+  seq: number;          // 包序号，用于检测丢包
+  mode: number;         // 车辆模式
+  fault: number;        // 故障等级 (0=正常)
+  batt: number;         // 电池百分比
+  
+  flags: {              // 关键指示灯
+    estop: boolean;     // 🔴 急停
+    park: boolean;      // 🅿️ 手刹
+    lock: boolean;      // 🔒 液压锁
+    horn: boolean;      // 📢 喇叭
+    light: boolean;     // 💡 灯光总状态
   };
-  safety: {
-    emergency_stop: boolean;
-    parking_brake: boolean;
-    hydraulic_lock: boolean;
-    power_enable: boolean;
-    fault_code: number;
+  
+  drive: {              // 运动反馈
+    gear: number;       // 档位 (1=D, 2=N, 3=R)
+    spd_mode: string;   // T=乌龟(慢) R=兔子(快)
+    speed: number; // 车速 (km/h)
+    steer: number;      // 转向角度
+    throt: number;      // 油门开度
+    brake: number;      // 刹车开度
   };
-  motion: {
-    gear: string;
-    speed_mode: string;
-    speed_kph: number;
-    engine_rpm: number;
-    steering_angle_deg: number;
-    steering_norm: number;
-    left_track_speed: number;
-    right_track_speed: number;
-    throttle_feedback: number;
-    brake_feedback: number;
-  };
-  attitude: {
-    pitch_deg: number;
-    roll_deg: number;
-    yaw_deg: number;
-  };
-  // 忽略 arm 和 vitals 的详细定义以简化，需要时再加
-  vitals: {
-    fuel_percent: number;
-    coolant_temp_c: number;
-    hydraulic_pressure_bar: number;
-    battery_voltage_v: number;
-  };
-  aux: { // [修改] 替代 lights，扩展性更强
-    light_code: number;
-    horn_status: boolean; // [移入] 喇叭状态
+  
+  pose: {               // 姿态 (3D模型同步)
+    boom: number;       // 大臂角度
+    bucket: number;     // 铲斗角度
   };
 }
 
@@ -222,7 +207,7 @@ export function useWebRTC({
         try {
           const data = JSON.parse(e.data) as TelemetryData
           // 🐛 调试用：打印接收到的遥测数据 (每30帧打印一次，防止刷屏)
-          if (data.connection.seq && data.connection.seq % 30 === 0) {
+          if (data.seq && data.seq % 30 === 0) {
             console.log('📡 Telemetry:', data)
           }
           setTelemetry(data)
@@ -244,8 +229,8 @@ export function useWebRTC({
           dc.onmessage = (e) => {
             try {
               const data = JSON.parse(e.data) as TelemetryData
-              // 🐛 调试用：打印接收到的遥测数据 (每30帧打印一次，防止刷屏)
-              if (data.connection.seq && data.connection.seq % 30 === 0) {
+              // 🐛 调试用：打印接收到的遥测数据 (每10帧打印一次，防止刷屏)
+              if (data.seq && data.seq % 10 === 0) {
                 console.log('📡 Telemetry:', data)
               }
               setTelemetry(data)

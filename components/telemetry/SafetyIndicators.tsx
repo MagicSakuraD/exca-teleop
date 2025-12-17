@@ -7,8 +7,8 @@ interface SafetyIndicatorsProps {
 }
 
 export const SafetyIndicators: React.FC<SafetyIndicatorsProps> = ({ telemetry }) => {
-  const isHydraulicLocked = telemetry?.safety.hydraulic_lock ?? true;
-  const isParkingBrakeActive = telemetry?.safety.parking_brake ?? true;
+  const isHydraulicLocked = telemetry?.flags.lock ?? true;
+  const isParkingBrakeActive = telemetry?.flags.park ?? true;
 
   if (!isHydraulicLocked && !isParkingBrakeActive) return null;
 

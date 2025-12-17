@@ -100,24 +100,10 @@ const XBOX_MAPPING = {
   BTN_RIGHT: 15,
 };
 
-// 踏板原始值处理：直接使用 G293 原始值，不做归一化
-// G293 实测: 松开 = 1, 踩死 = -1
-// 只做死区处理，避免未初始化值
-const getPedalValue = (val: number | undefined): number => {
-  // 处理未定义或 NaN 的情况，返回 1（松开状态）
-  if (val === undefined || isNaN(val)) {
-    return 1;
-  }
-  // 死区处理：如果轴值在 -0.1 到 0.1 之间，认为是未初始化，返回 1（松开）
-  if (Math.abs(val) < 0.1) {
-    return 1;
-  }
-  // 直接返回原始值：1 (松开) ~ -1 (踩死)
-  return val;
-};
+
 
 // 死区，避免摇杆轻微晃动产生误操作
-const DEADZONE = 0.1;
+const DEADZONE = 0.05;
 
 /**
  * 标准化普通摇杆轴的函数
