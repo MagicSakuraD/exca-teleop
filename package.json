@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 80",
+    "dev": "next dev -p 3001",
     "build": "next build",
-    "start": "next start -p 80",
+    "start": "next start -p 3001",
     "lint": "eslint ."
   },
   "dependencies": {
@@ -32,7 +32,7 @@
     "@radix-ui/react-slider": "1.2.2",
     "@radix-ui/react-slot": "1.1.1",
     "@radix-ui/react-switch": "1.1.2",
-    "@radix-ui/react-tabs": "1.1.2",
+    "@radix-ui/react-tabs": "^1.1.2",
     "@radix-ui/react-toast": "1.2.4",
     "@radix-ui/react-toggle": "1.1.1",
     "@radix-ui/react-toggle-group": "1.1.1",
