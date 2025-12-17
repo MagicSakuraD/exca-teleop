@@ -363,7 +363,7 @@ export const useExcavatorGamepad = () => {
       animationFrameRef.current = requestAnimationFrame(updateControls);
 
       //打印newControls
-      console.log("newControls", newControls);
+      // console.log("newControls", newControls);
     };
     updateControls();
     return () => {

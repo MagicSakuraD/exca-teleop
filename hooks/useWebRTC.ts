@@ -205,7 +205,18 @@ export function useWebRTC({
       
       dcTelemetry.onmessage = (e) => {
         try {
-          const data = JSON.parse(e.data) as TelemetryData
+          // 处理 ArrayBuffer 或字符串
+          let jsonStr: string
+          if (e.data instanceof ArrayBuffer) {
+            jsonStr = new TextDecoder().decode(e.data)
+          } else if (typeof e.data === 'string') {
+            jsonStr = e.data
+          } else {
+            console.warn('未知的数据类型:', typeof e.data)
+            return
+          }
+          
+          const data = JSON.parse(jsonStr) as TelemetryData
           // 🐛 调试用：打印接收到的遥测数据 (每30帧打印一次，防止刷屏)
           if (data.seq && data.seq % 30 === 0) {
             console.log('📡 Telemetry:', data)
@@ -228,7 +239,18 @@ export function useWebRTC({
           dc.onopen = () => addLog('✅ 遥测通道已打开', 'success')
           dc.onmessage = (e) => {
             try {
-              const data = JSON.parse(e.data) as TelemetryData
+              // 处理 ArrayBuffer 或字符串
+              let jsonStr: string
+              if (e.data instanceof ArrayBuffer) {
+                jsonStr = new TextDecoder().decode(e.data)
+              } else if (typeof e.data === 'string') {
+                jsonStr = e.data
+              } else {
+                console.warn('未知的数据类型:', typeof e.data)
+                return
+              }
+              
+              const data = JSON.parse(jsonStr) as TelemetryData
               // 🐛 调试用：打印接收到的遥测数据 (每10帧打印一次，防止刷屏)
               if (data.seq && data.seq % 10 === 0) {
                 console.log('📡 Telemetry:', data)
