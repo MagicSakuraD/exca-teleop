@@ -57,9 +57,9 @@ const LOADER_MAPPING = {
   BRAKE_AXIS: 5,    // 刹车踏板 (默认1, 踩下-1) - 通常刹车是轴3，离合是轴1，需根据实际情况微调
   
   // 按钮索引 (实测 G923/Xbox模式)
-  BTN_CROSS: 0,   // A
-  BTN_CIRCLE: 1,  // B
-  BTN_SQUARE: 2,  // X
+  BTN_CROSS: 0,   // A -> 液压锁 (Toggle)
+  BTN_CIRCLE: 1,  // B -> 手刹 (Toggle)
+  BTN_SQUARE: 2,  // X -> 高压使能 (Toggle)
   BTN_TRIANGLE: 3,// Y
   
   // 使用拨片进行换挡 (Shuttle Shift) - 用户确认 L1/R1 为左右拨片
@@ -103,7 +103,7 @@ const XBOX_MAPPING = {
 
 
 // 死区，避免摇杆轻微晃动产生误操作
-const DEADZONE = 0.05;
+const DEADZONE = 0.001;
 
 /**
  * 标准化普通摇杆轴的函数
@@ -237,14 +237,14 @@ export const useExcavatorGamepad = () => {
           
           // 4. 辅助功能
           horn: wheel.buttons[LOADER_MAPPING.BTN_HORN].pressed,
-          parking_brake: wheel.buttons[LOADER_MAPPING.BTN_CIRCLE].pressed, // O/B键手刹
+          parking_brake: wheel.buttons[LOADER_MAPPING.BTN_CIRCLE].pressed, // B键手刹
           emergency_stop: wheel.buttons[LOADER_MAPPING.BTN_OPTIONS].pressed,
+          hydraulic_lock: wheel.buttons[LOADER_MAPPING.BTN_CROSS].pressed, // A键液压锁
+          power_enable: wheel.buttons[LOADER_MAPPING.BTN_SQUARE].pressed,  // X键高压使能
           
           // 其他默认
           speed_mode: 'turtle',
           light_code: 0,
-          hydraulic_lock: false,
-          power_enable: true,
         };
       } else if (mode === 'xbox' && xbox) {
         // ===========================

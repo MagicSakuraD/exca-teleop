@@ -135,7 +135,9 @@ export function ControlsHelpDialog({ open, onOpenChange }: ControlsHelpDialogPro
                   <div className="flex justify-between"><span>右拨片 (R1)</span> <span className="text-yellow-300">前进档 (D)</span></div>
                   <div className="flex justify-between"><span>左拨片 (L1)</span> <span className="text-yellow-300">倒档 (R)</span></div>
                   <div className="flex justify-between"><span>R3 / 喇叭键</span> <span className="text-orange-300">📢 鸣笛</span></div>
-                  <div className="flex justify-between"><span>O / Circle</span> <span className="text-red-400">手刹</span></div>
+                  <div className="flex justify-between"><span>O / Circle / B</span> <span className="text-red-400">手刹 (Hold)</span></div>
+                  <div className="flex justify-between"><span>X / Cross / A</span> <span className="text-blue-400">液压锁 (Hold)</span></div>
+                  <div className="flex justify-between"><span>Square / X</span> <span className="text-green-400">高压上电 (Hold)</span></div>
                   <div className="flex justify-between"><span>Option / Menu</span> <span className="text-red-500 font-bold">🚨 急停</span></div>
                 </div>
 
